@@ -1,0 +1,176 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Space Grotesk", "Segoe UI", Tahoma, sans-serif;
+  --font-mono: "IBM Plex Mono", Consolas, monospace;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background:
+      linear-gradient(180deg, #030a1e8f 0%, #020817c7 100%),
+      url("/network_background.png") center top / cover fixed no-repeat,
+      #040917;
+    color: #eaf1ff;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+}
+
+@layer components {
+  .top-hero {
+    background:
+      linear-gradient(180deg, #050b1dcf 0%, #0816339c 100%),
+      url("/network_background.png") center top / cover no-repeat;
+    background-blend-mode: normal, screen;
+  }
+
+  .top-hero::before,
+  .top-hero::after {
+    content: "";
+    position: absolute;
+    border-radius: 999px;
+    filter: blur(2px);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .top-hero::before {
+    width: 360px;
+    height: 180px;
+    left: -90px;
+    top: -35px;
+    background: radial-gradient(circle at 30% 30%, #6ea6ff3d, transparent 72%);
+  }
+
+  .top-hero::after {
+    width: 420px;
+    height: 180px;
+    right: -100px;
+    top: -40px;
+    background: radial-gradient(circle at 55% 40%, #68d8ff3b, transparent 74%);
+  }
+
+  .top-hero-grid {
+    background-image:
+      linear-gradient(to right, #9ab8f117 1px, transparent 1px),
+      linear-gradient(to bottom, #9ab8f117 1px, transparent 1px);
+    background-size: 22px 22px;
+    opacity: 0.28;
+    mask-image: linear-gradient(to bottom, #000 25%, transparent 100%);
+  }
+
+  .brand-shell {
+    border: 1px solid #9ab8f13d;
+    background:
+      linear-gradient(145deg, #0f1f45cc, #0b1736ad),
+      radial-gradient(360px 180px at 72% -10%, #67b7ff2f, transparent 70%);
+    box-shadow: 0 24px 50px -30px #020617c9;
+    backdrop-filter: blur(8px);
+  }
+
+  .app-stage-bg {
+    background:
+      radial-gradient(900px 420px at 50% -8%, #18387436 0%, transparent 66%),
+      radial-gradient(460px 280px at 13% 58%, #1d4d8f33 0%, transparent 76%),
+      radial-gradient(520px 300px at 82% 52%, #214b9f35 0%, transparent 74%),
+      linear-gradient(145deg, #050b1d78, #0a1b4473 56%, #08132f84),
+      url("/network_background.png") center 120px / cover no-repeat;
+    background-blend-mode: normal, normal, normal, normal, screen;
+  }
+
+  .app-stage-bg::before,
+  .app-stage-bg::after {
+    content: "";
+    position: absolute;
+    border-radius: 999px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .app-stage-bg::before {
+    width: 620px;
+    height: 260px;
+    left: -120px;
+    top: 90px;
+    background: radial-gradient(circle at 30% 30%, #5e8bff1f, transparent 68%);
+  }
+
+  .app-stage-bg::after {
+    width: 700px;
+    height: 300px;
+    right: -140px;
+    top: 120px;
+    background: radial-gradient(circle at 50% 45%, #63d7ff18, transparent 70%);
+  }
+
+  .logo-mark {
+    width: 88px;
+    height: 74px;
+    position: relative;
+  }
+
+  .logo-mark span {
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    transform-origin: 30% 60%;
+  }
+
+  .logo-mark .layer-0 {
+    background: linear-gradient(160deg, #88daff, #2e8cff);
+    transform: translateY(-8px) skewY(-12deg);
+  }
+
+  .logo-mark .layer-1 {
+    background: linear-gradient(160deg, #3f76df, #2f4476);
+    transform: translateY(4px) skewY(-12deg);
+  }
+
+  .logo-mark .layer-2 {
+    background: linear-gradient(160deg, #47b9a0, #2b2f5c);
+    transform: translateY(-1px) translateX(12px) skewY(-12deg);
+    clip-path: polygon(25% 0, 100% 0, 76% 100%, 0 100%);
+  }
+
+  .ui-card {
+    @apply rounded-2xl border border-blue-200/20 bg-slate-950/45 p-5 shadow-xl shadow-slate-950/40 backdrop-blur-md;
+  }
+
+  .ui-label {
+    @apply text-sm font-medium text-slate-200;
+  }
+
+  .ui-input,
+  .ui-select,
+  .ui-textarea {
+    @apply mt-1 w-full rounded-xl border border-blue-300/35 bg-slate-950/80 px-3 py-2 text-slate-100 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-400/45;
+  }
+
+  .ui-fieldset {
+    @apply rounded-xl border border-blue-300/25 p-3;
+  }
+
+  .ui-legend {
+    @apply px-1 text-sm font-semibold text-blue-100;
+  }
+
+  .ui-check {
+    @apply inline-flex cursor-pointer items-center gap-2 rounded-lg border border-blue-200/20 bg-slate-900/35 px-2.5 py-1.5 text-sm text-slate-200 transition hover:border-blue-200/40 hover:bg-slate-900/60;
+  }
+
+  .ui-checkbox {
+    @apply h-4 w-4 rounded border-blue-300/50 bg-slate-950/85 text-blue-500 focus:ring-blue-400;
+  }
+
+  .ui-nav-link {
+    @apply inline-flex items-center rounded-lg border border-blue-300/20 bg-slate-900/30 px-3 py-1.5 text-sm font-medium text-blue-100 transition hover:border-blue-200/45 hover:bg-slate-900/65 hover:text-white;
+  }
+}

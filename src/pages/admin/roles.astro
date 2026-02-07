@@ -1,0 +1,308 @@
+---
+import Alert from "../../components/ui/Alert.astro";
+import Badge from "../../components/ui/Badge.astro";
+import Button from "../../components/ui/Button.astro";
+import Card from "../../components/ui/Card.astro";
+import PageHeader from "../../components/ui/PageHeader.astro";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { readSessionEmail, sessionCookieName } from "../../lib/auth";
+import { supabase, supabaseAdmin } from "../../lib/supabase";
+
+export const prerender = false;
+
+type User = {
+  email: string;
+  username: string;
+};
+
+type Role = {
+  id: number;
+  name: string;
+};
+
+type Category = {
+  id: number;
+  name: string;
+};
+
+type RoleCategory = {
+  role_id: number;
+  category_id: number;
+};
+
+function parseCategoryIds(params: URLSearchParams): number[] {
+  return [
+    ...new Set(
+      params
+        .getAll("category_ids")
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0),
+    ),
+  ];
+}
+
+const token = Astro.cookies.get(sessionCookieName())?.value;
+const currentUserEmail = readSessionEmail(token);
+if (!currentUserEmail) {
+  return Astro.redirect("/login");
+}
+
+const currentUserRes = await supabase
+  .from("users")
+  .select("email, username")
+  .eq("email", currentUserEmail)
+  .maybeSingle();
+
+if (currentUserRes.error || !currentUserRes.data) {
+  return Astro.redirect("/login");
+}
+
+const currentUser: User = currentUserRes.data;
+
+const myRoleIdsRes = await supabase
+  .from("user_roles")
+  .select("role_id")
+  .eq("user_email", currentUser.email);
+
+if (myRoleIdsRes.error) {
+  throw new Error(myRoleIdsRes.error.message);
+}
+
+const myRoleIds = [...new Set((myRoleIdsRes.data ?? []).map((link) => link.role_id))];
+let myRoles: Role[] = [];
+
+if (myRoleIds.length > 0) {
+  const myRolesRes = await supabase.from("roles").select("id, name").in("id", myRoleIds);
+  if (myRolesRes.error) {
+    throw new Error(myRolesRes.error.message);
+  }
+  myRoles = myRolesRes.data ?? [];
+}
+
+const isAdmin = myRoles.some((role) => role.name === "admin");
+if (!isAdmin) {
+  return Astro.redirect("/");
+}
+
+let actionError = "";
+let actionSuccess = "";
+
+if (Astro.request.method === "POST") {
+  const rawBody = await Astro.request.text();
+  const params = new URLSearchParams(rawBody);
+  const action = String(params.get("action") ?? "");
+
+  if (action === "create") {
+    const roleName = String(params.get("role_name") ?? "").trim();
+    const categoryIds = parseCategoryIds(params);
+
+    if (!roleName) {
+      actionError = "Rollenname fehlt.";
+    } else {
+      const createdRoleRes = await supabaseAdmin
+        .from("roles")
+        .insert({ name: roleName })
+        .select("id, name")
+        .single();
+
+      if (createdRoleRes.error || !createdRoleRes.data) {
+        actionError = createdRoleRes.error?.message ?? "Rolle konnte nicht erstellt werden.";
+      } else {
+        if (categoryIds.length > 0) {
+          const roleCategoryRows = categoryIds.map((categoryId) => ({
+            role_id: createdRoleRes.data.id,
+            category_id: categoryId,
+          }));
+          const roleCategoryInsertRes = await supabaseAdmin
+            .from("role_categories")
+            .insert(roleCategoryRows);
+
+          if (roleCategoryInsertRes.error) {
+            actionError = roleCategoryInsertRes.error.message;
+          }
+        }
+        if (!actionError) {
+          actionSuccess = `Rolle erstellt: ${createdRoleRes.data.name}`;
+        }
+      }
+    }
+  } else if (action === "update") {
+    const roleId = Number(params.get("role_id"));
+    const roleName = String(params.get("role_name") ?? "").trim();
+    const categoryIds = parseCategoryIds(params);
+
+    if (!Number.isInteger(roleId) || roleId <= 0) {
+      actionError = "Ungueltige Rolle.";
+    } else if (!roleName) {
+      actionError = "Rollenname fehlt.";
+    } else {
+      const roleUpdateRes = await supabaseAdmin
+        .from("roles")
+        .update({ name: roleName })
+        .eq("id", roleId);
+
+      if (roleUpdateRes.error) {
+        actionError = roleUpdateRes.error.message;
+      } else {
+        const removeRes = await supabaseAdmin.from("role_categories").delete().eq("role_id", roleId);
+        if (removeRes.error) {
+          actionError = removeRes.error.message;
+        } else if (categoryIds.length > 0) {
+          const roleCategoryRows = categoryIds.map((categoryId) => ({
+            role_id: roleId,
+            category_id: categoryId,
+          }));
+          const insertRes = await supabaseAdmin.from("role_categories").insert(roleCategoryRows);
+          if (insertRes.error) {
+            actionError = insertRes.error.message;
+          }
+        }
+
+        if (!actionError) {
+          actionSuccess = `Rolle aktualisiert: ${roleName}`;
+        }
+      }
+    }
+  } else if (action === "delete") {
+    const roleId = Number(params.get("role_id"));
+    if (!Number.isInteger(roleId) || roleId <= 0) {
+      actionError = "Ungueltige Rolle.";
+    } else {
+      const roleNameRes = await supabaseAdmin.from("roles").select("name").eq("id", roleId).maybeSingle();
+      const deleteRes = await supabaseAdmin.from("roles").delete().eq("id", roleId);
+      if (deleteRes.error) {
+        actionError = deleteRes.error.message;
+      } else {
+        actionSuccess = `Rolle geloescht: ${roleNameRes.data?.name ?? `#${roleId}`}`;
+      }
+    }
+  } else {
+    actionError = "Unbekannte Aktion.";
+  }
+}
+
+const [rolesRes, categoriesRes, roleCategoriesRes] = await Promise.all([
+  supabase.from("roles").select("id, name").order("id", { ascending: true }),
+  supabase.from("categories").select("id, name").order("name", { ascending: true }),
+  supabase.from("role_categories").select("role_id, category_id"),
+]);
+
+if (rolesRes.error || categoriesRes.error || roleCategoriesRes.error) {
+  throw new Error(
+    rolesRes.error?.message ?? categoriesRes.error?.message ?? roleCategoriesRes.error?.message,
+  );
+}
+
+const roles: Role[] = rolesRes.data ?? [];
+const categories: Category[] = categoriesRes.data ?? [];
+const roleCategories: RoleCategory[] = roleCategoriesRes.data ?? [];
+
+const categoryIdsByRoleId = new Map<number, Set<number>>();
+for (const link of roleCategories) {
+  const current = categoryIdsByRoleId.get(link.role_id) ?? new Set<number>();
+  current.add(link.category_id);
+  categoryIdsByRoleId.set(link.role_id, current);
+}
+---
+
+<BaseLayout title="Rollen verwalten">
+  <PageHeader title="Rollen verwalten" subtitle="Lege Rollen an und steuere ihre Kategorie-Rechte.">
+    <Badge slot="actions">
+      Admin: <strong class="ml-1">{currentUser.username}</strong>
+    </Badge>
+    <a slot="actions" href="/" class="ui-nav-link">Zurueck</a>
+    <a slot="actions" href="/logout" class="ui-nav-link">Logout</a>
+  </PageHeader>
+
+  <div class="space-y-4">
+    {actionError && <Alert tone="error">{actionError}</Alert>}
+    {actionSuccess && <Alert tone="ok">{actionSuccess}</Alert>}
+  </div>
+
+  <div class="mt-4 space-y-4">
+    <Card class="space-y-4">
+      <h2 class="text-xl font-semibold text-white">Neue Rolle</h2>
+      <form method="post" class="space-y-4">
+        <input type="hidden" name="action" value="create" />
+
+        <div>
+          <label for="create-role-name" class="ui-label">Name</label>
+          <input id="create-role-name" name="role_name" type="text" required maxlength="60" class="ui-input" />
+        </div>
+
+        <fieldset class="ui-fieldset">
+          <legend class="ui-legend">Kategorien</legend>
+          <div class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {categories.map((category) => (
+              <label class="ui-check">
+                <input type="checkbox" name="category_ids" value={category.id} class="ui-checkbox" />
+                {category.name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <Button type="submit">Rolle erstellen</Button>
+      </form>
+    </Card>
+
+    <Card class="space-y-4">
+      <h2 class="text-xl font-semibold text-white">Bestehende Rollen ({roles.length})</h2>
+      {roles.length === 0 ? (
+        <p class="text-sm text-blue-100/80">Keine Rollen gefunden.</p>
+      ) : (
+        <div class="space-y-3">
+          {roles.map((role) => (
+            <article class="rounded-xl border border-blue-200/20 bg-slate-950/35 p-4">
+              <form method="post" class="space-y-4">
+                <input type="hidden" name="action" value="update" />
+                <input type="hidden" name="role_id" value={role.id} />
+
+                <div>
+                  <label for={`role-name-${role.id}`} class="ui-label">Rolle #{role.id}</label>
+                  <input
+                    id={`role-name-${role.id}`}
+                    name="role_name"
+                    type="text"
+                    required
+                    maxlength="60"
+                    value={role.name}
+                    class="ui-input"
+                  />
+                </div>
+
+                <fieldset class="ui-fieldset">
+                  <legend class="ui-legend">Kategorien</legend>
+                  <div class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {categories.map((category) => (
+                      <label class="ui-check">
+                        <input
+                          type="checkbox"
+                          name="category_ids"
+                          value={category.id}
+                          checked={categoryIdsByRoleId.get(role.id)?.has(category.id) ?? false}
+                          class="ui-checkbox"
+                        />
+                        {category.name}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <div class="flex flex-wrap gap-2">
+                  <Button type="submit">Speichern</Button>
+                </div>
+              </form>
+
+              <form method="post" class="mt-3">
+                <input type="hidden" name="action" value="delete" />
+                <input type="hidden" name="role_id" value={role.id} />
+                <Button type="submit" variant="danger">Loeschen</Button>
+              </form>
+            </article>
+          ))}
+        </div>
+      )}
+    </Card>
+  </div>
+</BaseLayout>

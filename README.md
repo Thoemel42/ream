@@ -1,74 +1,70 @@
-# Astro Supabase Starter
+# Astro + Supabase Starter
 
-![Astro Supabase Starter Preview](astro-supabase-starter-preview.png)
+Dieses Projekt verbindet ein Astro-Frontend mit einem Supabase-kompatiblen Backend.
 
-**View demo:** [https://astro-supabase-starter.netlify.app/](https://astro-supabase-starter.netlify.app/)
+## Voraussetzungen
 
-The Astro Supabase starter demonstrates how to integrate **Supabase** into an Astro project deployed on Netlify.
+- Docker + Docker Compose
+- Optional fuer lokalen Start ohne Docker: Node.js 20+
 
-## Deploying to Netlify
+## 1) Projekt starten (Astro + lokales Backend in Compose)
 
-If you click "Deploy to Netlify" button, it will create a new repo for you that looks exactly like this one, and sets that repo up immediately for deployment on Netlify.
-
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/netlify-templates/astro-supabase-starter&fullConfiguration=true)
-
-## Astro Commands
-
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
-
-## Developing Locally
-
-| Prerequisites                                                                |
-| :--------------------------------------------------------------------------- |
-| [Node.js](https://nodejs.org/) v18.14+                                       |
-| (optional) [nvm](https://github.com/nvm-sh/nvm) for Node version management  |
-| [Netlify account](https://netlify.com/)                                      |
-| [Netlify CLI](https://docs.netlify.com/cli/get-started/).                    |
-| [Supabase account](https://supabase.com/)                                    |
-
-### Set up the database
-
-To use this template, you’ll need to set up and seed a new Supabase database.
-
-1. Create a new Supabase project.
-2. Run the SQL commands found in the `supabase/migrations` directory in the Supabase UI.
-3. To seed the database with data, you can import the contents of the `supabase/seed.csv` file in the Supabase UI.
-
-ℹ️ _Note: This template was created to be used with the Supabase extension for Netlify. If you don’t wish to use the Netlify Supabase extension, you will need to set the `SUPABASE_DATABASE_URL` and `SUPABASE_ANON_KEY` environment variables in the `.env` file._
-
-### Install and run locally
-
-1. Clone this repository, then run `npm install` in its root directory.
-
-2. For the starter to have full functionality locally, please ensure you have an up-to-date version of Netlify CLI. Run:
-
-```
-npm install netlify-cli@latest -g
+```bash
+docker compose --profile local-supabase up --build
 ```
 
-3. Link your local repository to the deployed Netlify site. This will ensure you're using the same runtime version for both local development and your deployed site.
+Dann ist die App unter `http://localhost:4321` erreichbar.
 
+## 2) Nur Astro starten (mit externem Supabase-Projekt)
+
+Setze in `.env` diese Werte (z. B. aus `.env.example`):
+
+```bash
+SUPABASE_DATABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+SUPABASE_ANON_KEY=<anon-key>
+SUPABASE_JWT_SECRET=<jwt-secret>
 ```
-netlify link
+
+Dann nur Astro starten:
+
+```bash
+docker compose up --build
 ```
 
-4. Then, run the Astro.js development server via Netlify CLI:
+## 3) Lokal ohne Docker
 
+```bash
+npm install
+npm run dev
 ```
-netlify dev --target-port 4321
-```
 
-If your browser doesn't navigate to the site automatically, visit [localhost:8888](http://localhost:8888).
+Dabei muessen `SUPABASE_DATABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` und `SUPABASE_JWT_SECRET` in deiner Shell oder `.env` gesetzt sein.
 
-## Support
+## Hinweise
 
-If you get stuck along the way, get help in our [support forums](https://answers.netlify.com/).
+- Im lokalen Compose-Stack laufen `postgres` + `postgrest`.
+- Die Startdaten werden ueber `supabase/init.sql` angelegt.
+- Das Datenmodell enthaelt `public.users`, `public.roles`, `public.categories`, `public.resources`.
+- Beziehungen:
+  - `public.user_roles`: Ein User kann mehrere Rollen haben.
+  - `public.role_categories`: Jede Rolle kann mehrere Kategorien enthalten.
+  - `public.resources.created_by_email`: Jede Ressource hat einen anlegenden User.
+  - `public.resource_roles`: Eine Ressource kann einer oder mehreren Rollen zugeordnet sein.
+- Login:
+  - `http://localhost:4321/login`
+  - Die Startseite `http://localhost:4321` ist geschuetzt und erfordert Login.
+  - Nach Login siehst du nur Kategorien, die ueber deine Rollen freigegeben sind.
+  - Bei jeder sichtbaren Kategorie werden die zugeordneten Ressourcen angezeigt.
+  - Jeder eingeloggte User kann Ressourcen anlegen und sie einer oder mehreren eigenen Rollen zuweisen.
+  - Ressourcen bearbeiten/loeschen:
+    - Ersteller duerfen ihre eigenen Ressourcen bearbeiten und loeschen.
+    - Admins duerfen alle Ressourcen bearbeiten und loeschen.
+  - Admin-Funktionen:
+    - `http://localhost:4321/admin/roles`
+    - Nur User mit Rolle `admin` duerfen Rollen erstellen, bearbeiten und loeschen.
+    - Beim Erstellen/Bearbeiten einer Rolle kann der Admin Kategorien zuordnen.
+  - Demo-User:
+    - `admin` / `admin123`
+    - `editor` / `editor123`
+    - `reader` / `reader123`

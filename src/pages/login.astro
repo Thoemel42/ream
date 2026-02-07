@@ -1,0 +1,121 @@
+---
+import Alert from "../components/ui/Alert.astro";
+import Badge from "../components/ui/Badge.astro";
+import Button from "../components/ui/Button.astro";
+import Card from "../components/ui/Card.astro";
+import PageHeader from "../components/ui/PageHeader.astro";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import {
+  createSessionToken,
+  hashPassword,
+  readSessionEmail,
+  sessionCookieName,
+  sessionMaxAgeSeconds,
+} from "../lib/auth";
+import { supabaseAdmin } from "../lib/supabase";
+
+export const prerender = false;
+
+const existingToken = Astro.cookies.get(sessionCookieName())?.value;
+if (readSessionEmail(existingToken)) {
+  return Astro.redirect("/");
+}
+
+let loginError = "";
+let identifier = "";
+
+if (Astro.request.method === "POST") {
+  const rawBody = await Astro.request.text();
+  const params = new URLSearchParams(rawBody);
+  identifier = String(params.get("identifier") ?? "").trim();
+  const password = String(params.get("password") ?? "");
+
+  if (!identifier || !password) {
+    loginError = "Bitte Benutzername/E-Mail und Passwort eingeben.";
+  } else {
+    const byEmail = await supabaseAdmin
+      .from("users")
+      .select("email, username, password_hash")
+      .eq("email", identifier)
+      .maybeSingle();
+
+    const user =
+      byEmail.data ??
+      (
+        await supabaseAdmin
+          .from("users")
+          .select("email, username, password_hash")
+          .eq("username", identifier)
+          .maybeSingle()
+      ).data;
+
+    if (!user) {
+      loginError = "Benutzer nicht gefunden.";
+    } else if (hashPassword(password) !== user.password_hash) {
+      loginError = "Passwort ist falsch.";
+    } else {
+      const sessionToken = createSessionToken(user.email);
+      Astro.cookies.set(sessionCookieName(), sessionToken, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure: Astro.url.protocol === "https:",
+        maxAge: sessionMaxAgeSeconds(),
+      });
+      return Astro.redirect("/");
+    }
+  }
+}
+---
+
+<BaseLayout title="Login">
+  <div class="mx-auto max-w-4xl">
+    <PageHeader
+      title="Willkommen zur Ressourcen-App"
+      subtitle="Melde dich mit Benutzername oder E-Mail an."
+    />
+
+    <Card class="relative mx-auto max-w-xl overflow-hidden">
+      <div
+        class="pointer-events-none absolute -right-24 -top-24 h-56 w-56 rounded-full bg-[radial-gradient(circle,_rgba(47,123,255,0.25)_0%,_rgba(47,123,255,0)_70%)]"
+      >
+      </div>
+
+      <form method="post" class="relative z-10 space-y-4">
+        <label for="identifier" class="ui-label">Benutzername oder E-Mail</label>
+        <input
+          id="identifier"
+          name="identifier"
+          type="text"
+          required
+          value={identifier}
+          autocomplete="username"
+          class="ui-input"
+        />
+
+        <label for="password" class="ui-label">Passwort</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          required
+          autocomplete="current-password"
+          class="ui-input"
+        />
+
+        <Button type="submit">Einloggen</Button>
+      </form>
+
+      {loginError && <Alert tone="error" class="mt-4">{loginError}</Alert>}
+
+      <div class="mt-5 border-t border-blue-200/20 pt-4">
+        <p class="mb-2 text-sm text-blue-100/85">Demo-Logins</p>
+        <div class="flex flex-wrap gap-2">
+          <Badge class="font-mono">admin / admin123</Badge>
+          <Badge class="font-mono">editor / editor123</Badge>
+          <Badge class="font-mono">reader / reader123</Badge>
+        </div>
+      </div>
+    </Card>
+  </div>
+</BaseLayout>

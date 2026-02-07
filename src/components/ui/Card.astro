@@ -1,0 +1,11 @@
+---
+const { as = "section", class: className = "" } = Astro.props as {
+  as?: keyof HTMLElementTagNameMap;
+  class?: string;
+};
+const Tag = as;
+---
+
+<Tag class:list={["ui-card", className]}>
+  <slot />
+</Tag>

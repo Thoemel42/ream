@@ -1,71 +1,738 @@
 ---
-import { getEntry } from "astro:content";
-import Alert from "../components/Alert.astro";
-import Guide from "../components/Guide.astro";
-import Layout from "../components/Layout.astro";
-import TableRow from "../components/TableRow.astro";
-import { supabase } from "../utils/database";
+import Alert from "../components/ui/Alert.astro";
+import Badge from "../components/ui/Badge.astro";
+import Button from "../components/ui/Button.astro";
+import Card from "../components/ui/Card.astro";
+import PageHeader from "../components/ui/PageHeader.astro";
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { readSessionEmail, sessionCookieName } from "../lib/auth";
+import { supabase, supabaseAdmin } from "../lib/supabase";
 
 export const prerender = false;
 
-let frameworks;
-let frameworksError;
+type User = {
+  email: string;
+  username: string;
+};
 
-// Fetch frameworks data from Supabase if connection is set up
-if (supabase) {
-  const { data, error } = await supabase
-    .from("frameworks")
-    .select("*")
-    .order("likes", { ascending: false });
-  frameworks = data;
-  frameworksError = error;
+type Role = {
+  id: number;
+  name: string;
+};
+
+type RoleCategory = {
+  role_id: number;
+  category_id: number;
+};
+
+type Category = {
+  id: number;
+  name: string;
+};
+
+type ResourceRole = {
+  resource_id: number;
+  role_id: number;
+};
+
+type ResourceCategory = {
+  resource_id: number;
+  category_id: number;
+};
+
+type Resource = {
+  id: number;
+  title: string;
+  type: "link" | "text";
+  content: string;
+  created_by_email: string;
+};
+
+function parseRoleIds(params: URLSearchParams, allowedRoleIds: Set<number>): number[] {
+  const selected = params
+    .getAll("role_ids")
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  const uniqueSelected = [...new Set(selected)];
+  return uniqueSelected.filter((roleId) => allowedRoleIds.has(roleId));
 }
 
-// Get guides
-const connectGuide = await getEntry("guides", "guide-connect-supabase");
-const fetchDataGuide = await getEntry("guides", "guide-fetch-data");
+function parseCategoryIds(params: URLSearchParams, allowedCategoryIds: Set<number>): number[] {
+  const selected = params
+    .getAll("category_ids")
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0);
+
+  const uniqueSelected = [...new Set(selected)];
+  return uniqueSelected.filter((categoryId) => allowedCategoryIds.has(categoryId));
+}
+
+function isExternalLink(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+const token = Astro.cookies.get(sessionCookieName())?.value;
+const currentUserEmail = readSessionEmail(token);
+if (!currentUserEmail) {
+  return Astro.redirect("/login");
+}
+
+const currentUserRes = await supabase
+  .from("users")
+  .select("email, username")
+  .eq("email", currentUserEmail)
+  .maybeSingle();
+
+if (currentUserRes.error || !currentUserRes.data) {
+  return Astro.redirect("/login");
+}
+
+const currentUser: User = currentUserRes.data;
+
+const userRolesRes = await supabase
+  .from("user_roles")
+  .select("role_id")
+  .eq("user_email", currentUser.email);
+
+if (userRolesRes.error) {
+  throw new Error(userRolesRes.error.message);
+}
+
+const myRoleIds = [...new Set((userRolesRes.data ?? []).map((link) => link.role_id))];
+const myRoleIdSet = new Set<number>(myRoleIds);
+let myRoleCategories: RoleCategory[] = [];
+let myVisibleCategoryIds: number[] = [];
+let myVisibleCategoryIdSet = new Set<number>();
+
+let myRoles: Role[] = [];
+if (myRoleIds.length > 0) {
+  const myRolesRes = await supabase
+    .from("roles")
+    .select("id, name")
+    .in("id", myRoleIds)
+    .order("name", { ascending: true });
+
+  if (myRolesRes.error) {
+    throw new Error(myRolesRes.error.message);
+  }
+  myRoles = myRolesRes.data ?? [];
+
+  const myRoleCategoriesRes = await supabase
+    .from("role_categories")
+    .select("role_id, category_id")
+    .in("role_id", myRoleIds);
+
+  if (myRoleCategoriesRes.error) {
+    throw new Error(myRoleCategoriesRes.error.message);
+  }
+
+  myRoleCategories = myRoleCategoriesRes.data ?? [];
+  myVisibleCategoryIds = [...new Set(myRoleCategories.map((link) => link.category_id))];
+  myVisibleCategoryIdSet = new Set<number>(myVisibleCategoryIds);
+}
+
+const isAdmin = myRoles.some((role) => role.name === "admin");
+
+let actionError = "";
+let actionSuccess = "";
+let openCreateResourcePanel = false;
+let openEditResourceId: number | null = null;
+const requestedCreatePanel = Astro.url.searchParams.get("new") === "1";
+const requestedEditValue = Number(Astro.url.searchParams.get("edit"));
+const requestedEditResourceId =
+  Number.isInteger(requestedEditValue) && requestedEditValue > 0 ? requestedEditValue : null;
+
+if (Astro.request.method === "POST") {
+  const rawBody = await Astro.request.text();
+  const params = new URLSearchParams(rawBody);
+  const action = String(params.get("action") ?? "");
+
+  if (action === "create_resource") {
+    openCreateResourcePanel = true;
+    const title = String(params.get("title") ?? "").trim();
+    const type = String(params.get("resource_type") ?? "");
+    const content = String(params.get("content") ?? "").trim();
+    const roleIds = parseRoleIds(params, myRoleIdSet);
+    const categoryIds = parseCategoryIds(params, myVisibleCategoryIdSet);
+
+    if (!title) {
+      actionError = "Titel der Ressource fehlt.";
+    } else if (type !== "link" && type !== "text") {
+      actionError = "Ungueltiger Ressourcentyp.";
+    } else if (!content) {
+      actionError = "Inhalt der Ressource fehlt.";
+    } else if (roleIds.length === 0) {
+      actionError = "Waehle mindestens eine deiner Rollen aus.";
+    } else if (categoryIds.length === 0) {
+      actionError = "Waehle mindestens eine sichtbare Kategorie aus.";
+    } else {
+      const createRes = await supabaseAdmin
+        .from("resources")
+        .insert({ title, type, content, created_by_email: currentUser.email })
+        .select("id")
+        .single();
+
+      if (createRes.error || !createRes.data) {
+        actionError = createRes.error?.message ?? "Ressource konnte nicht erstellt werden.";
+      } else {
+        const resourceRoleRows = roleIds.map((roleId) => ({
+          resource_id: createRes.data.id,
+          role_id: roleId,
+        }));
+
+        const linkRes = await supabaseAdmin.from("resource_roles").insert(resourceRoleRows);
+        if (linkRes.error) {
+          actionError = linkRes.error.message;
+        } else {
+          const resourceCategoryRows = categoryIds.map((categoryId) => ({
+            resource_id: createRes.data.id,
+            category_id: categoryId,
+          }));
+          const categoryLinkRes = await supabaseAdmin.from("resource_categories").insert(resourceCategoryRows);
+          if (categoryLinkRes.error) {
+            actionError = categoryLinkRes.error.message;
+          } else {
+            actionSuccess = "Ressource wurde erstellt.";
+            openCreateResourcePanel = false;
+          }
+        }
+      }
+    }
+  } else if (action === "update_resource") {
+    const resourceId = Number(params.get("resource_id"));
+    if (Number.isInteger(resourceId) && resourceId > 0) {
+      openEditResourceId = resourceId;
+    }
+    const title = String(params.get("title") ?? "").trim();
+    const type = String(params.get("resource_type") ?? "");
+    const content = String(params.get("content") ?? "").trim();
+    const roleIds = parseRoleIds(params, myRoleIdSet);
+    const categoryIds = parseCategoryIds(params, myVisibleCategoryIdSet);
+
+    if (!Number.isInteger(resourceId) || resourceId <= 0) {
+      actionError = "Ungueltige Ressource.";
+    } else if (!title) {
+      actionError = "Titel der Ressource fehlt.";
+    } else if (type !== "link" && type !== "text") {
+      actionError = "Ungueltiger Ressourcentyp.";
+    } else if (!content) {
+      actionError = "Inhalt der Ressource fehlt.";
+    } else if (roleIds.length === 0) {
+      actionError = "Waehle mindestens eine deiner Rollen aus.";
+    } else if (categoryIds.length === 0) {
+      actionError = "Waehle mindestens eine sichtbare Kategorie aus.";
+    } else {
+      const targetRes = await supabaseAdmin
+        .from("resources")
+        .select("id, created_by_email")
+        .eq("id", resourceId)
+        .maybeSingle();
+
+      if (targetRes.error) {
+        actionError = targetRes.error.message;
+      } else if (!targetRes.data) {
+        actionError = "Ressource nicht gefunden.";
+      } else if (targetRes.data.created_by_email !== currentUser.email) {
+        actionError = "Du darfst diese Ressource nicht bearbeiten.";
+      } else {
+        const updateRes = await supabaseAdmin
+          .from("resources")
+          .update({ title, type, content })
+          .eq("id", resourceId);
+
+        if (updateRes.error) {
+          actionError = updateRes.error.message;
+        } else {
+          const removeLinksRes = await supabaseAdmin
+            .from("resource_roles")
+            .delete()
+            .eq("resource_id", resourceId);
+
+          if (removeLinksRes.error) {
+            actionError = removeLinksRes.error.message;
+          } else {
+            const resourceRoleRows = roleIds.map((roleId) => ({
+              resource_id: resourceId,
+              role_id: roleId,
+            }));
+            const addLinksRes = await supabaseAdmin.from("resource_roles").insert(resourceRoleRows);
+            if (addLinksRes.error) {
+              actionError = addLinksRes.error.message;
+            } else {
+              const removeCategoriesRes = await supabaseAdmin
+                .from("resource_categories")
+                .delete()
+                .eq("resource_id", resourceId);
+
+              if (removeCategoriesRes.error) {
+                actionError = removeCategoriesRes.error.message;
+              } else {
+                const resourceCategoryRows = categoryIds.map((categoryId) => ({
+                  resource_id: resourceId,
+                  category_id: categoryId,
+                }));
+                const addCategoriesRes = await supabaseAdmin
+                  .from("resource_categories")
+                  .insert(resourceCategoryRows);
+                if (addCategoriesRes.error) {
+                  actionError = addCategoriesRes.error.message;
+                } else {
+                  actionSuccess = "Ressource wurde aktualisiert.";
+                  openEditResourceId = null;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } else if (action === "delete_resource") {
+    const resourceId = Number(params.get("resource_id"));
+    if (!Number.isInteger(resourceId) || resourceId <= 0) {
+      actionError = "Ungueltige Ressource.";
+    } else {
+      const targetRes = await supabaseAdmin
+        .from("resources")
+        .select("id, created_by_email")
+        .eq("id", resourceId)
+        .maybeSingle();
+
+      if (targetRes.error) {
+        actionError = targetRes.error.message;
+      } else if (!targetRes.data) {
+        actionError = "Ressource nicht gefunden.";
+      } else if (targetRes.data.created_by_email !== currentUser.email) {
+        actionError = "Du darfst diese Ressource nicht loeschen.";
+      } else {
+        const deleteRes = await supabaseAdmin.from("resources").delete().eq("id", resourceId);
+        if (deleteRes.error) {
+          actionError = deleteRes.error.message;
+        } else {
+          actionSuccess = "Ressource wurde geloescht.";
+        }
+      }
+    }
+  }
+}
+
+const showCreateResourcePanel = requestedCreatePanel || openCreateResourcePanel;
+const activeEditResourceId = openEditResourceId ?? requestedEditResourceId;
+
+let visibleRoles: Role[] = myRoles;
+let visibleCategories: Category[] = [];
+let resourcesByCategoryId = new Map<number, Resource[]>();
+let creatorNameByEmail = new Map<string, string>();
+let assignedRoleIdsByResourceId = new Map<number, Set<number>>();
+let assignedCategoryIdsByResourceId = new Map<number, Set<number>>();
+let loadError = "";
+
+if (myRoleIds.length > 0 && myVisibleCategoryIds.length > 0) {
+  const [categoriesRes, resourceRolesRes, resourceCategoriesRes] = await Promise.all([
+    supabase
+      .from("categories")
+      .select("id, name")
+      .in("id", myVisibleCategoryIds)
+      .order("name", { ascending: true }),
+    supabase.from("resource_roles").select("resource_id, role_id").in("role_id", myRoleIds),
+    supabase
+      .from("resource_categories")
+      .select("resource_id, category_id")
+      .in("category_id", myVisibleCategoryIds),
+  ]);
+
+  if (categoriesRes.error || resourceRolesRes.error || resourceCategoriesRes.error) {
+    loadError =
+      categoriesRes.error?.message ??
+      resourceRolesRes.error?.message ??
+      resourceCategoriesRes.error?.message ??
+      "Unbekannter Fehler";
+  } else {
+    visibleCategories = categoriesRes.data ?? [];
+    const resourceRoles: ResourceRole[] = resourceRolesRes.data ?? [];
+    const resourceCategories: ResourceCategory[] = resourceCategoriesRes.data ?? [];
+
+    const roleVisibleResourceIds = new Set<number>(resourceRoles.map((link) => link.resource_id));
+    const visibleResourceCategoryLinks = resourceCategories.filter((link) =>
+      roleVisibleResourceIds.has(link.resource_id),
+    );
+    const resourceIds = [...new Set(visibleResourceCategoryLinks.map((link) => link.resource_id))];
+
+    if (resourceIds.length > 0) {
+      const resourcesRes = await supabase
+        .from("resources")
+        .select("id, title, type, content, created_by_email")
+        .in("id", resourceIds)
+        .order("id", { ascending: true });
+
+      if (resourcesRes.error) {
+        loadError = resourcesRes.error.message;
+      } else {
+        const resources: Resource[] = resourcesRes.data ?? [];
+        const resourcesById = new Map<number, Resource>(resources.map((resource) => [resource.id, resource]));
+
+        const creatorEmails = [...new Set(resources.map((resource) => resource.created_by_email))];
+        if (creatorEmails.length > 0) {
+          const creatorUsersRes = await supabase.from("users").select("email, username").in("email", creatorEmails);
+          if (creatorUsersRes.error) {
+            loadError = creatorUsersRes.error.message;
+          } else {
+            creatorNameByEmail = new Map<string, string>(
+              (creatorUsersRes.data ?? []).map((user) => [user.email, user.username]),
+            );
+          }
+        }
+
+        const resourcesMap = new Map<number, Map<number, Resource>>();
+
+        for (const link of resourceRoles) {
+          const resource = resourcesById.get(link.resource_id);
+          if (!resource) continue;
+
+          const currentAssignedRoles = assignedRoleIdsByResourceId.get(resource.id) ?? new Set<number>();
+          currentAssignedRoles.add(link.role_id);
+          assignedRoleIdsByResourceId.set(resource.id, currentAssignedRoles);
+        }
+
+        for (const link of visibleResourceCategoryLinks) {
+          const resource = resourcesById.get(link.resource_id);
+          if (!resource) continue;
+
+          const currentAssignedCategories = assignedCategoryIdsByResourceId.get(resource.id) ?? new Set<number>();
+          currentAssignedCategories.add(link.category_id);
+          assignedCategoryIdsByResourceId.set(resource.id, currentAssignedCategories);
+
+          const currentByCategory = resourcesMap.get(link.category_id) ?? new Map<number, Resource>();
+          currentByCategory.set(resource.id, resource);
+          resourcesMap.set(link.category_id, currentByCategory);
+        }
+
+        resourcesByCategoryId = new Map<number, Resource[]>(
+          [...resourcesMap.entries()].map(([categoryId, value]) => [categoryId, [...value.values()]]),
+        );
+      }
+    }
+  }
+}
+
 ---
 
-<Layout title="Web Frameworks">
-  {
-    supabase ? (
-      frameworks ? (
-        <>
-          <h1 class="mb-8 text-4xl font-bold">
-            Vote for Your Favorite Web Framework
-          </h1>
-          <table class="w-full text-left">
-            <thead>
-              <tr class="font-mono text-base border-t border-b">
-                <th>Name</th>
-                <th>Logo</th>
-                <th>Likes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {frameworks?.map((framework) => (
-                <TableRow framework={framework} />
-              ))}
-            </tbody>
-          </table>
-        </>
-      ) : (
-        <>
-          {frameworksError && (
-            <Alert
-              title={frameworksError.code}
-              text={frameworksError.message}
-              variant="error"
-            />
-          )}
-          {fetchDataGuide && <Guide guide={fetchDataGuide} />}
-        </>
-      )
-    ) : (
-      <>
-        <Alert title="Finish setting up your new site" text="Before your website is ready, you must complete the steps from the guide below to create, populate, and connect your Supabase database."/>
-        {connectGuide && <Guide guide={connectGuide} />}
-      </>
-    )
-  }
-</Layout>
+<BaseLayout title="Ressourcen">
+  <PageHeader title="Ressourcen" subtitle="Organisiere und teile Teamwissen zentral.">
+    <Badge slot="actions">
+      Eingeloggt als <strong class="ml-1">{currentUser.username}</strong>
+    </Badge>
+    <Badge slot="actions">{currentUser.email}</Badge>
+    {isAdmin && (
+      <a slot="actions" href="/admin/roles" class="ui-nav-link">
+        Rollen verwalten
+      </a>
+    )}
+    <a slot="actions" href="/logout" class="ui-nav-link">Logout</a>
+  </PageHeader>
+
+  <div class="space-y-4">
+    {actionError && <Alert tone="error">{actionError}</Alert>}
+    {actionSuccess && <Alert tone="ok">{actionSuccess}</Alert>}
+  </div>
+
+  {loadError ? (
+    <Card class="mt-4 space-y-2">
+      <h2 class="text-xl font-semibold text-white">Verbindung fehlgeschlagen</h2>
+      <p class="text-sm text-blue-100/80">{loadError}</p>
+    </Card>
+  ) : (
+    <div class="mt-4 space-y-4">
+      <Card class="space-y-4">
+        {!showCreateResourcePanel ? (
+          <a href="/?new=1" class="ui-nav-link w-fit">Neue Ressource</a>
+        ) : (
+          <>
+            <div class="flex items-center justify-between gap-2">
+              <h2 class="text-xl font-semibold text-white">Neue Ressource</h2>
+              <a href="/" class="ui-nav-link">Einklappen</a>
+            </div>
+
+            {visibleRoles.length === 0 ? (
+              <p class="text-sm text-blue-100/80">Du hast keine Rollen und kannst daher keine Ressource anlegen.</p>
+            ) : (
+              <form method="post" class="space-y-4">
+                <input type="hidden" name="action" value="create_resource" />
+
+                <div>
+                  <label for="resource-title" class="ui-label">Titel</label>
+                  <input
+                    id="resource-title"
+                    name="title"
+                    type="text"
+                    required
+                    maxlength="140"
+                    placeholder="Kurzer Titel der Ressource"
+                    class="ui-input"
+                  />
+                </div>
+
+                <div>
+                  <label for="resource-type" class="ui-label">Typ</label>
+                  <select id="resource-type" name="resource_type" required class="ui-select">
+                    <option value="link">link</option>
+                    <option value="text">text</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label for="resource-content" class="ui-label">Inhalt</label>
+                  <textarea
+                    id="resource-content"
+                    name="content"
+                    required
+                    maxlength="1200"
+                    rows={4}
+                    placeholder="https://example.com oder freier Text"
+                    class="ui-textarea"
+                  />
+                </div>
+
+                <fieldset class="ui-fieldset">
+                  <legend class="ui-legend">Eigene Rollen (mindestens eine)</legend>
+                  <div class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {visibleRoles.map((role) => (
+                      <label class="ui-check">
+                        <input type="checkbox" name="role_ids" value={role.id} class="ui-checkbox" />
+                        {role.name}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <fieldset class="ui-fieldset">
+                  <legend class="ui-legend">Sichtbare Kategorien (mindestens eine)</legend>
+                  <div class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {visibleCategories.map((category) => (
+                      <label class="ui-check">
+                        <input type="checkbox" name="category_ids" value={category.id} class="ui-checkbox" />
+                        {category.name}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <Button type="submit">Ressource anlegen</Button>
+              </form>
+            )}
+          </>
+        )}
+      </Card>
+
+      <Card class="space-y-3">
+        <h2 class="text-xl font-semibold text-white">Deine Rollen ({visibleRoles.length})</h2>
+        {visibleRoles.length === 0 ? (
+          <p class="text-sm text-blue-100/80">Dir ist aktuell keine Rolle zugewiesen.</p>
+        ) : (
+          <div class="flex flex-wrap gap-2">
+            {visibleRoles.map((role) => (
+              <Badge>{role.name}</Badge>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card class="space-y-2">
+        <h2 class="text-xl font-semibold text-white">Sichtbare Kategorien ({visibleCategories.length})</h2>
+        {visibleCategories.length === 0 ? (
+          <p class="text-sm text-blue-100/80">Keine sichtbaren Kategorien vorhanden.</p>
+        ) : (
+          <p class="text-sm text-blue-100/80">
+            Es werden nur Kategorien angezeigt, die ueber deine Rollen freigegeben sind.
+          </p>
+        )}
+      </Card>
+
+      {visibleCategories.map((category) => {
+        const categoryResources = resourcesByCategoryId.get(category.id) ?? [];
+        return (
+          <Card class="space-y-3 border-l-4 border-l-blue-400/70">
+            <h3 class="text-lg font-semibold text-blue-50">
+              #{category.id} {category.name}
+            </h3>
+            {categoryResources.length === 0 ? (
+              <p class="text-sm text-blue-100/80">Keine Ressourcen in dieser Kategorie.</p>
+            ) : (
+              <ul class="grid list-none gap-2 p-0 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+                {categoryResources.map((resource) => {
+                  const isLink = resource.type === "link";
+                  const cardTone = isLink
+                    ? "border-blue-300/25 bg-[linear-gradient(165deg,rgba(37,99,235,0.18),rgba(2,6,23,0.74))] shadow-[0_14px_30px_-24px_rgba(59,130,246,0.95)]"
+                    : "border-emerald-300/25 bg-[linear-gradient(165deg,rgba(16,185,129,0.16),rgba(2,6,23,0.74))] shadow-[0_14px_30px_-24px_rgba(16,185,129,0.95)]";
+                  const headerTone = isLink
+                    ? "border-blue-300/20 bg-blue-950/45"
+                    : "border-emerald-300/20 bg-emerald-950/30";
+                  const iconTone = isLink
+                    ? "border-blue-300/35 bg-blue-500/20 text-blue-100"
+                    : "border-emerald-300/35 bg-emerald-500/20 text-emerald-100";
+                  const badgeTone = isLink
+                    ? "border-blue-300/35 bg-blue-700/55 text-blue-100"
+                    : "border-emerald-300/35 bg-emerald-700/50 text-emerald-100";
+                  const contentLinkTone = isLink
+                    ? "text-blue-100 underline decoration-blue-300/50 hover:text-blue-50"
+                    : "text-emerald-100 underline decoration-emerald-300/50 hover:text-emerald-50";
+
+                  return (
+                    <li id={`resource-${resource.id}`} class:list={["flex h-full flex-col rounded-lg border p-2.5", cardTone]}>
+                      <details class="group" open={activeEditResourceId === resource.id}>
+                        <summary class="list-none cursor-pointer [&::-webkit-details-marker]:hidden">
+                          <div class:list={["flex items-center justify-between gap-2 rounded-md border px-2.5 py-2", headerTone]}>
+                            <div class="flex min-w-0 items-center gap-2">
+                              <div class:list={["inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border", iconTone]}>
+                                {isLink ? (
+                                  <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 0 0-7.07-7.07L10.7 5.22" />
+                                    <path d="M14 11a5 5 0 0 0-7.07 0L4.8 13.12a5 5 0 1 0 7.07 7.07l1.41-1.41" />
+                                  </svg>
+                                ) : (
+                                  <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M7 3h7l5 5v13H7z" />
+                                    <path d="M14 3v5h5" />
+                                    <path d="M10 13h6" />
+                                    <path d="M10 17h4" />
+                                  </svg>
+                                )}
+                              </div>
+                              <span class="truncate text-sm font-semibold text-slate-50">{resource.title}</span>
+                            </div>
+                            <div class="flex items-center gap-1.5">
+                              <Badge class={`text-[10px] ${badgeTone}`}>{resource.type}</Badge>
+                              <span class="text-[10px] text-blue-200/80">#{resource.id}</span>
+                              <span class="text-xs text-blue-200/70 transition group-open:rotate-180">v</span>
+                            </div>
+                          </div>
+                        </summary>
+
+                        <div class="mt-2 space-y-2">
+                          <div class="break-words text-xs text-slate-100">
+                            {resource.type === "link" && isExternalLink(resource.content) ? (
+                              <a
+                                href={resource.content}
+                                target="_blank"
+                                rel="noreferrer"
+                                class={`line-clamp-3 underline-offset-2 ${contentLinkTone}`}
+                              >
+                                {resource.content}
+                              </a>
+                            ) : (
+                              <p class="m-0 line-clamp-4 text-slate-100">{resource.content}</p>
+                            )}
+                          </div>
+                          <p class="text-[11px] text-blue-100/75">
+                            Angelegt von: {creatorNameByEmail.get(resource.created_by_email) ?? resource.created_by_email}
+                          </p>
+                          {resource.created_by_email === currentUser.email && (
+                            <div class="pt-1">
+                              {activeEditResourceId === resource.id ? (
+                                <div class="space-y-3 rounded-xl border border-blue-200/20 bg-slate-950/35 p-3">
+                                  <div class="flex items-center justify-between gap-2">
+                                    <h4 class="text-sm font-semibold text-white">Ressource bearbeiten</h4>
+                                    <a href={`/#resource-${resource.id}`} class="ui-nav-link">Abbrechen</a>
+                                  </div>
+
+                                  <form method="post" class="space-y-3">
+                                    <input type="hidden" name="action" value="update_resource" />
+                                    <input type="hidden" name="resource_id" value={resource.id} />
+
+                                    <div>
+                                      <label for={`edit-title-${resource.id}`} class="ui-label">Titel</label>
+                                      <input
+                                        id={`edit-title-${resource.id}`}
+                                        name="title"
+                                        type="text"
+                                        required
+                                        maxlength="140"
+                                        value={resource.title}
+                                        class="ui-input"
+                                      />
+                                    </div>
+
+                                    <div>
+                                      <label for={`edit-type-${resource.id}`} class="ui-label">Typ</label>
+                                      <select
+                                        id={`edit-type-${resource.id}`}
+                                        name="resource_type"
+                                        required
+                                        class="ui-select"
+                                      >
+                                        <option value="link" selected={resource.type === "link"}>link</option>
+                                        <option value="text" selected={resource.type === "text"}>text</option>
+                                      </select>
+                                    </div>
+
+                                    <div>
+                                      <label for={`edit-content-${resource.id}`} class="ui-label">Inhalt</label>
+                                      <textarea
+                                        id={`edit-content-${resource.id}`}
+                                        name="content"
+                                        required
+                                        maxlength="1200"
+                                        rows={3}
+                                        class="ui-textarea"
+                                      >{resource.content}</textarea>
+                                    </div>
+
+                                    <fieldset class="ui-fieldset">
+                                      <legend class="ui-legend">Eigene Rollen (mindestens eine)</legend>
+                                      <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                                        {visibleRoles.map((role) => (
+                                          <label class="ui-check">
+                                            <input
+                                              type="checkbox"
+                                              name="role_ids"
+                                              value={role.id}
+                                              checked={assignedRoleIdsByResourceId.get(resource.id)?.has(role.id) ?? false}
+                                              class="ui-checkbox"
+                                            />
+                                            {role.name}
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </fieldset>
+
+                                    <fieldset class="ui-fieldset">
+                                      <legend class="ui-legend">Sichtbare Kategorien (mindestens eine)</legend>
+                                      <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                                        {visibleCategories.map((category) => (
+                                          <label class="ui-check">
+                                            <input
+                                              type="checkbox"
+                                              name="category_ids"
+                                              value={category.id}
+                                              checked={assignedCategoryIdsByResourceId.get(resource.id)?.has(category.id) ?? false}
+                                              class="ui-checkbox"
+                                            />
+                                            {category.name}
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </fieldset>
+
+                                    <Button type="submit">Speichern</Button>
+                                  </form>
+                                </div>
+                              ) : (
+                                <a href={`/?edit=${resource.id}#resource-${resource.id}`} class="ui-nav-link">
+                                  Bearbeiten
+                                </a>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Card>
+        );
+      })}
+    </div>
+  )}
+</BaseLayout>
